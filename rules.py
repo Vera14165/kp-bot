@@ -7,42 +7,79 @@
 import prices
 
 
-def make_1c_licenses(need_rm):
-    """Подбирает клиентские лицензии 1С ПОН на need_rm рабочих мест (минимальная стоимость)."""
-    lic = sorted(prices.CLIENT_1C, key=lambda x: x["price"] / x["rm"])
-    remaining = need_rm
+def _optimal_combo(need_rm, packs, make_name):
+    """Находит самую дешёвую комбинацию пакетов лицензий, покрывающую need_rm рабочих мест.
+
+    Перебирает все варианты (включая «взять пакет больше, чем нужно», если это дешевле)
+    и возвращает список {"name", "qty", "unit"} с минимальной суммой.
+
+    packs    — список {"rm": int, "price": int} доступных пакетов.
+    make_name — функция: (rm, price) -> название позиции.
+    """
+    if need_rm <= 0:
+        return []
+
+    # Сортируем пакеты по размеру
+    packs = sorted(packs, key=lambda x: x["rm"])
+    max_rm = packs[-1]["rm"]
+    limit = need_rm + max_rm  # больше набрать не имеет смысла
+
+    INF = float("inf")
+    # best[i] = минимальная стоимость, чтобы покрыть РОВНО i рабочих мест
+    best = [INF] * (limit + 1)
+    # choice[i] = (размер пакета, число пакетов) последнего шага
+    choice = [None] * (limit + 1)
+    best[0] = 0
+
+    for i in range(limit + 1):
+        if best[i] == INF:
+            continue
+        for p in packs:
+            ni = i + p["rm"]
+            if ni <= limit:
+                cand = best[i] + p["price"]
+                if cand < best[ni]:
+                    best[ni] = cand
+                    choice[ni] = p["rm"]
+
+    # Выбираем покрытие с минимальной стоимостью (можно с запасом: от need_rm до limit)
+    total_min = INF
+    target = need_rm
+    for i in range(need_rm, limit + 1):
+        if best[i] < total_min:
+            total_min = best[i]
+            target = i
+
+    # Восстанавливаем комбинацию
+    counts = {}
+    cur = target
+    while cur > 0 and choice[cur] is not None:
+        rm = choice[cur]
+        counts[rm] = counts.get(rm, 0) + 1
+        cur -= rm
+    if cur != 0:  # крайний случай — страховка
+        pass
+
     items = []
-    for l in lic:
-        if remaining <= 0:
-            break
-        n = remaining // l["rm"]
-        if n:
-            items.append({"name": l["name"], "qty": n, "unit": l["price"]})
-            remaining -= n * l["rm"]
-    if remaining > 0:
-        one = next(l for l in prices.CLIENT_1C if l["rm"] == 1)
-        items.append({"name": one["name"], "qty": remaining, "unit": one["price"]})
+    for rm in sorted(counts):
+        price = next(p["price"] for p in packs if p["rm"] == rm)
+        items.append({"name": make_name(rm, price), "qty": counts[rm], "unit": price})
     return items
+
+
+def make_1c_licenses(need_rm):
+    """Клиентские лицензии 1С ПРОФ на need_rm рабочих мест — самая выгодная комбинация."""
+    packs = [{"rm": l["rm"], "price": l["price"]} for l in prices.CLIENT_1C]
+    return _optimal_combo(need_rm, packs, lambda rm, price: next(
+        l["name"] for l in prices.CLIENT_1C if l["rm"] == rm))
 
 
 def make_bit_licenses(need_rm):
-    """Лицензии для ТОР на need_rm рабочих мест (минимальная стоимость)."""
-    order = sorted(prices.BIT_LIC, key=lambda x: x["price"] / x["rm"])
-    remaining = need_rm
-    items = []
-    for l in order:
-        if remaining <= 0:
-            break
-        n = remaining // l["rm"]
-        if n:
-            items.append({"name": f"БИТ.[ТОР]. Клиентская лицензия на {l['rm']} РМ. Эл.",
-                          "qty": n, "unit": l["price"]})
-            remaining -= n * l["rm"]
-    if remaining > 0:
-        one = next(l for l in prices.BIT_LIC if l["rm"] == 1)
-        items.append({"name": f"БИТ.[ТОР]. Клиентская лицензия на 1 РМ. Эл.",
-                      "qty": remaining, "unit": one["price"]})
-    return items
+    """БИТ-лицензии для ТОР на need_rm рабочих мест — самая выгодная комбинация."""
+    packs = [{"rm": l["rm"], "price": l["price"]} for l in prices.BIT_LIC]
+    return _optimal_combo(
+        need_rm, packs,
+        lambda rm, price: f"БИТ.[ТОР]. Клиентская лицензия на {rm} РМ. Эл.")
 
 
 def pick_bit_licenses(need_rm):
@@ -110,8 +147,8 @@ def build_quote(tor_key=None, main_key=None, total_users=1, tor_users=None,
     if client_server:
         s = prices.SERVER["x86_64"]  # по умолч. x86-64
         lines.append([s["name"], 1, s["price"], s["price"]])
-        if total_users <= 5:
-            warnings.append("Для 5 и менее пользователей может подойти 1С:Сервер МИНИ (21 300 руб) — уточните.")
+        if total_users <= 15:
+            warnings.append("Для небольших сетей может подойти 1С:Сервер МИНИ на 5 подключений (21 300 руб) — уточните.")
 
     # --- Сопровождение ТОР ---
     if need_support_months and need_support_months in prices.SUPPORT_TOR:
