@@ -89,20 +89,20 @@ def kb_products():
 
 def kb_yes_no():
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton("Да"), KeyboardButton("Нет")]], resize_keyboard=True
+        keyboard=[[KeyboardButton(text="Да"), KeyboardButton(text="Нет")]], resize_keyboard=True
     )
 
 def kb_server():
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton("Файловый"), KeyboardButton("Клиент-сервер")]],
+        keyboard=[[KeyboardButton(text="Файловый"), KeyboardButton(text="Клиент-сервер")]],
         resize_keyboard=True,
     )
 
 def kb_support():
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton("Не нужно")],
-            [KeyboardButton("6 мес."), KeyboardButton("12 мес."), KeyboardButton("18 мес.")],
+            [KeyboardButton(text="Не нужно")],
+            [KeyboardButton(text="6 мес."), KeyboardButton(text="12 мес."), KeyboardButton(text="18 мес.")],
         ],
         resize_keyboard=True,
     )
@@ -236,18 +236,32 @@ async def calc_and_send(m: Message, state: FSMContext):
 
 # ------- Запуск -------
 async def main():
+    # Если WEBHOOK_URL не задан — пробуем взять его из Railway/Render автоматически
+    webhook_url = WEBHOOK_URL
+    if RUN_MODE == "web" and not webhook_url:
+        # Railway даёт адрес через переменную RAILWAY_PUBLIC_DOMAIN
+        for env in ("RAILWAY_PUBLIC_DOMAIN", "RAILWAY_TCP_PROXY_DOMAIN", "RENDER_EXTERNAL_URL"):
+            v = os.getenv(env)
+            if v:
+                webhook_url = "https://" + v.rstrip("/") + "/webhook"
+                break
+        if not webhook_url:
+            log.warning("WEBHOOK_URL не задан и автоматически не определён — перехожу на polling.")
+            await dp.start_polling(bot)
+            return
+
     if RUN_MODE == "web":
         from aiogram.webhook.aiohttp_server import setup_application
         from aiohttp import web
 
-        await bot.set_webhook(WEBHOOK_URL)
+        await bot.set_webhook(webhook_url)
         app = web.Application()
         setup_application(app, dp, bot=bot)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, port=PORT)
         await site.start()
-        log.info(f"Webhook on :{PORT}")
+        log.info(f"Webhook on :{PORT} url={webhook_url}")
         await bot.session.close()
     else:
         await dp.start_polling(bot)
