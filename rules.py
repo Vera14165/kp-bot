@@ -87,7 +87,8 @@ def pick_bit_licenses(need_rm):
 
 
 def build_quote(tor_key=None, main_key=None, total_users=1, tor_users=None,
-                client_server=False, has_platform=False, need_support_months=0):
+                client_server=False, has_platform=False, need_support_months=0,
+                has_server=False):
     """Собирает комплект КП по правилам.
 
     Параметры:
@@ -128,6 +129,11 @@ def build_quote(tor_key=None, main_key=None, total_users=1, tor_users=None,
     if tor_key is not None and not has_platform:
         pt = prices.PLATFORM["tech"]
         lines.append([pt["name"], 1, pt["price"], pt["price"]])
+        warnings.append(
+            "* Технологическая поставка нужна, если система будет развёрнута ОТДЕЛЬНО от других "
+            "систем на платформе 1С (для ТОРов). Если ТОР размещается в одной локальной сети с "
+            "уже купленной платформой 1С — тех.поставка не требуется."
+        )
 
     # --- Клиентские лицензии 1С ---
     need_1c = total_users - included_1c
@@ -144,7 +150,8 @@ def build_quote(tor_key=None, main_key=None, total_users=1, tor_users=None,
                 lines.append([it["name"], it["qty"], it["unit"], it["unit"] * it["qty"]])
 
     # --- Сервер ---
-    if client_server:
+    # Если клиент-сервер и у клиента НЕТ своей лицензии на сервер — добавляем
+    if client_server and not has_server:
         s = prices.SERVER["x86_64"]  # по умолч. x86-64
         lines.append([s["name"], 1, s["price"], s["price"]])
         if total_users <= 15:
