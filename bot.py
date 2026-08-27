@@ -4,6 +4,7 @@
 Для прода на хостинге: RUN_MODE=web WEBHOOK_URL=https://... PORT=8080 python bot.py
 """
 import os
+import json
 import logging
 
 from dotenv import load_dotenv
@@ -11,7 +12,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     Message,
     ReplyKeyboardMarkup,
@@ -32,7 +33,33 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 RUN_MODE = os.getenv("RUN_MODE", "poll")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.getenv("PORT", "8080"))
-ALLOWED = {int(x) for x in os.getenv("ALLOWED_IDS", "").split(",") if x.strip()}
+
+# Администратор(ы) — кто может добавлять/удалять пользователей (Telegram ID через запятую)
+ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()}
+
+# Файл, где хранится белый список (чтобы не терялся при перезапуске)
+ALLOW_FILE = os.getenv("ALLOW_FILE", os.path.join(os.path.dirname(__file__), "allowed.json"))
+
+
+def load_allowed():
+    """Загружает белый список из файла + из переменной ALLOWED_IDS (если задана)."""
+    ids = {int(x) for x in os.getenv("ALLOWED_IDS", "").split(",") if x.strip()}
+    try:
+        if os.path.exists(ALLOW_FILE):
+            with open(ALLOW_FILE, "r", encoding="utf-8") as f:
+                ids |= {int(x) for x in json.load(f) if str(x).strip()}
+    except Exception as e:
+        log.warning(f"Не удалось прочитать {ALLOW_FILE}: {e}")
+    return ids
+
+
+def save_allowed(ids):
+    try:
+        with open(ALLOW_FILE, "w", encoding="utf-8") as f:
+            json.dump(sorted(ids), f, ensure_ascii=False)
+    except Exception as e:
+        log.warning(f"Не удалось сохранить {ALLOW_FILE}: {e}")
+
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -71,6 +98,7 @@ class KPD(StatesGroup):
     tor_users = State()
     platform = State()
     server = State()
+    has_server = State()
     support = State()
 
 # ------- Вспомогательные -------
@@ -110,14 +138,101 @@ def kb_support():
 # ------- Хендлеры -------
 @dp.message(CommandStart())
 async def start(m: Message, state: FSMContext):
-    if ALLOWED and m.from_user.id not in ALLOWED:
-        await m.answer("Доступ запрещён. Обратитесь к администратору.")
+    allowed = load_allowed()
+    if ADMIN_IDS and m.from_user.id in ADMIN_IDS:
+        # Админ — пропускаем без ограничений
+        await state.set_state(KPD.product_choice)
+        await m.answer(
+            "Привет, администратор! Я помогу собрать КП по 1С/БИТ.\n\n"
+            "Выберите продукт (или используйте команды /add /list /del для управления доступом):",
+            reply_markup=kb_products(),
+        )
+        return
+    if m.from_user.id not in allowed:
+        await m.answer("Доступ запрещён. Попросите администратора добавить вас.")
         return
     await state.set_state(KPD.product_choice)
     await m.answer(
         "Привет! Я помогу собрать КП по 1С/БИТ.\n\nВыберите продукт:",
         reply_markup=kb_products(),
     )
+
+
+# ---- Админ-команды управления доступом ----
+def _is_admin(user_id):
+    return user_id in ADMIN_IDS
+
+
+@dp.message(Command("add"))
+async def cmd_add(m: Message):
+    if not _is_admin(m.from_user.id):
+        await m.answer("Команда доступна только администратору.")
+        return
+    parts = m.text.split()
+    if len(parts) < 2:
+        await m.answer("Использование: /add <telegram_id>  (например: /add 123456789)")
+        return
+    uid = parse_int(parts[1])
+    if not uid:
+        await m.answer("Некорректный ID. Пример: /add 123456789")
+        return
+    allowed = load_allowed()
+    allowed.add(uid)
+    save_allowed(allowed)
+    await m.answer(f"✅ Пользователь {uid} добавлен в список доступа.")
+
+
+@dp.message(Command("del"))
+async def cmd_del(m: Message):
+    if not _is_admin(m.from_user.id):
+        await m.answer("Команда доступна только администратору.")
+        return
+    parts = m.text.split()
+    if len(parts) < 2:
+        await m.answer("Использование: /del <telegram_id>")
+        return
+    uid = parse_int(parts[1])
+    if not uid:
+        await m.answer("Некорректный ID. Пример: /del 123456789")
+        return
+    allowed = load_allowed()
+    if uid in allowed:
+        allowed.discard(uid)
+        save_allowed(allowed)
+        await m.answer(f"🚫 Пользователь {uid} удалён из доступа.")
+    else:
+        await m.answer(f"Пользователь {uid} не найден в списке.")
+
+
+@dp.message(Command("list"))
+async def cmd_list(m: Message):
+    if not _is_admin(m.from_user.id):
+        await m.answer("Команда доступна только администратору.")
+        return
+    allowed = load_allowed()
+    if not allowed:
+        await m.answer("Список доступа пуст.")
+        return
+    await m.answer("Список допущенных пользователей:\n" + "\n".join(sorted(map(str, allowed))))
+
+
+@dp.message(Command("me"))
+async def cmd_me(m: Message):
+    await m.answer(f"Ваш Telegram ID: {m.from_user.id}")
+
+
+@dp.message(Command("help"))
+async def cmd_help(m: Message):
+    if _is_admin(m.from_user.id):
+        await m.answer(
+            "Команды администратора:\n"
+            "/me — узнать свой Telegram ID\n"
+            "/add <id> — добавить пользователя\n"
+            "/del <id> — удалить пользователя\n"
+            "/list — показать список доступа"
+        )
+    else:
+        await m.answer("Команды:\n/start — начать расчёт\n/me — ваш Telegram ID")
 
 @dp.message(KPD.product_choice)
 async def on_product(m: Message, state: FSMContext):
@@ -179,6 +294,25 @@ async def on_server(m: Message, state: FSMContext):
         return
     await state.update_data(client_server=(t == "клиент-сервер"))
     d = await state.get_data()
+    if t == "клиент-сервер":
+        # Спросить про лицензию на сервер (только для клиент-сервера)
+        await state.set_state(KPD.has_server)
+        await m.answer("Есть ли уже у клиента лицензия на сервер 1С:Предприятие?", reply_markup=kb_yes_no())
+    elif d.get("kind") == "tor":
+        await state.set_state(KPD.support)
+        await m.answer("Нужно сопровождение ТОР (ПТС)?", reply_markup=kb_support())
+    else:
+        await calc_and_send(m, state)
+
+
+@dp.message(KPD.has_server)
+async def on_has_server(m: Message, state: FSMContext):
+    t = m.text.strip().lower()
+    if t not in ("да", "нет"):
+        await m.answer("Ответьте «Да» или «Нет».")
+        return
+    await state.update_data(has_server=(t == "да"))
+    d = await state.get_data()
     if d.get("kind") == "tor":
         await state.set_state(KPD.support)
         await m.answer("Нужно сопровождение ТОР (ПТС)?", reply_markup=kb_support())
@@ -204,6 +338,7 @@ async def calc_and_send(m: Message, state: FSMContext):
             "total_users": d.get("total_users", 1),
             "client_server": d.get("client_server", False),
             "has_platform": d.get("has_platform", False),
+            "has_server": d.get("has_server", False),
         }
         if d.get("kind") == "tor":
             kw["tor_key"] = d["product"]
