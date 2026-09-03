@@ -128,9 +128,9 @@ def build_quote(tor_key=None, main_key=None, total_users=1, tor_users=None,
     # Для ТОР самостоятельная конфигурация: нужна тех.поставка, если платформы нет
     if tor_key is not None and not has_platform:
         pt = prices.PLATFORM["tech"]
-        lines.append([pt["name"], 1, pt["price"], pt["price"]])
+        lines.append([pt["name"] + " *", 1, pt["price"], pt["price"]])
         warnings.append(
-            "* Технологическая поставка нужна, если система будет развёрнута ОТДЕЛЬНО от других "
+            "Технологическая поставка нужна, если система будет развёрнута ОТДЕЛЬНО от других "
             "систем на платформе 1С (для ТОРов). Если ТОР размещается в одной локальной сети с "
             "уже купленной платформой 1С — тех.поставка не требуется."
         )
