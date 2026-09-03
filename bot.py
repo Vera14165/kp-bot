@@ -8,13 +8,14 @@ import json
 import logging
 
 from dotenv import load_dotenv
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     Message,
+    BotCommand,
     ReplyKeyboardMarkup,
     KeyboardButton,
     ReplyKeyboardRemove,
@@ -135,6 +136,12 @@ def kb_support():
         resize_keyboard=True,
     )
 
+def kb_restart():
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="🔄 Новый расчёт")]],
+        resize_keyboard=True,
+    )
+
 # ------- Хендлеры -------
 @dp.message(CommandStart())
 async def start(m: Message, state: FSMContext):
@@ -166,6 +173,12 @@ async def start(m: Message, state: FSMContext):
         "Привет! Я помогу собрать КП по 1С/БИТ.\n\nВыберите продукт:",
         reply_markup=kb_products(),
     )
+
+
+@dp.message(F.text.in_({"🔄 Новый расчёт", "Новый расчёт", "/start"}))
+async def restart(m: Message, state: FSMContext):
+    # Кнопка «Новый расчёт» или команда /start — перезапуск диалога
+    await start(m, state)
 
 
 # ---- Админ-команды управления доступом ----
@@ -375,12 +388,21 @@ async def calc_and_send(m: Message, state: FSMContext):
         out.append(f"\n⚠ {w}")
     out.append("\n📌 Позиции 1С — по разрешению в 1С; ТОР — через Внутренний заказ в К7.")
 
-    await m.answer("\n".join(out), parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+    await m.answer("\n".join(out), parse_mode="HTML", reply_markup=kb_restart())
     await state.clear()
 
 
 # ------- Запуск -------
 async def main():
+    # Меню команд (кнопка «/» внизу слева в Telegram) — /start всегда под рукой
+    try:
+        await bot.set_my_commands([
+            BotCommand(command="start", description="Начать новый расчёт КП"),
+            BotCommand(command="me", description="Мой Telegram ID"),
+        ])
+    except Exception as e:
+        log.warning(f"Не удалось установить меню команд: {e}")
+
     # Если WEBHOOK_URL не задан — пробуем взять его из Railway/Render автоматически
     webhook_url = WEBHOOK_URL
     if RUN_MODE == "web" and not webhook_url:
